@@ -129,6 +129,27 @@ Each environment includes visual and physical factor variations to evaluate robu
 
 
 
+## CLI
+
+After installation, the `swm` command-line tool is available to inspect your datasets, environments, and checkpoints without writing any code:
+
+```bash
+# list cached datasets
+swm datasets
+
+# inspect a specific dataset
+swm inspect pusht_expert_train
+
+# list all registered environments
+swm envs
+
+# show factors of variation for an environment
+swm fovs PushT-v1
+
+# list available model checkpoints
+swm checkpoints
+```
+
 ## Installing stable-worldmodel
 
 stable-worldmodel is available on PyPI and can be installed with:

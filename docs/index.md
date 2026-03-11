@@ -112,6 +112,7 @@ After you have installed stable-worldmodel, try the [Quick Start Guide](quick_st
 | | |
 |---|---|
 | **[Environments](envs/pusht.md)** | Explore the included environments: PushT, TwoRoom, OGBench, DMControl, and more. |
+| **[CLI Reference](cli.md)** | Inspect datasets, environments, and checkpoints from the terminal with the `swm` command. |
 | **[API Reference](api/world.md)** | Detailed documentation for World, Policy, Solver, Dataset, and other modules. |
 
 ## Citation

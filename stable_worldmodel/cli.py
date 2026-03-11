@@ -8,8 +8,6 @@ import typer
 from rich import print
 from rich.table import Table
 
-from stable_worldmodel.envs import WORLDS
-
 
 app = typer.Typer()
 
@@ -197,6 +195,8 @@ def envs():
     )
     table.add_column('Type', justify='left', style='magenta', no_wrap=True)
 
+    from stable_worldmodel.envs import WORLDS
+
     continuous = sorted(e for e in WORLDS if 'Discrete' not in e)
     discrete = sorted(e for e in WORLDS if 'Discrete' in e)
 
@@ -218,6 +218,8 @@ def fovs(
 ):
     """List factors of variation for the given environment."""
     import gymnasium as gym
+
+    from stable_worldmodel.envs import WORLDS
 
     if '/' not in env:
         env = f'swm/{env}'
