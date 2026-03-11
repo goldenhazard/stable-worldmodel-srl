@@ -104,6 +104,7 @@ Each environment includes visual and physical factor variations to evaluate robu
 | [Solver](https://github.com/galilai-group/stable-worldmodel/tree/main/stable_worldmodel/solver) | Type |
 |----------|---|
 | Cross-Entropy Method (CEM)| Sampling |
+| Improved CEM (iCEM) | Sampling |
 | Model Predictive Path Integral (MPPI) | Sampling |
 | Gradient Descent (SGD, Adam) | Gradient |
 | Projected Gradient Descent (PGD) | Gradient |
