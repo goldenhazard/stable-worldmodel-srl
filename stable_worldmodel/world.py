@@ -926,7 +926,7 @@ class World:
         }
 
         # expend all data to the right shape (x, y, (original_shape))
-        shape_prefix = next(iter(self.infos.values())).shape[:2]
+        shape_prefix = self.infos['pixels'].shape[:2]
 
         # TODO get the data from the previous step in the dataset for history
         init_step = {

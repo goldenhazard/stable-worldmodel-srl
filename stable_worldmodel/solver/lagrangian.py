@@ -330,7 +330,11 @@ class LagrangianSolver(torch.nn.Module):
             self._lambdas.cpu() if self._lambdas is not None else None
         )
 
+        constraint_info = ''
+        if outputs['constraint_violation']:
+            mean_viol = np.mean(outputs['constraint_violation'])
+            constraint_info = f' | constraint_violation={mean_viol:.4f}'
         print(
-            f'LagrangianSolver.solve completed in {time.time() - start_time:.4f} seconds.'
+            f'LagrangianSolver.solve completed in {time.time() - start_time:.4f} seconds{constraint_info}.'
         )
         return outputs
