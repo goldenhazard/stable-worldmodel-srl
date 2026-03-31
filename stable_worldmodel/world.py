@@ -323,7 +323,10 @@ class World:
                 'Frame history > 1 not supported for dataset recording.'
             )
 
-        path = Path(cache_dir or get_cache_dir()) / f'{dataset_name}.h5'
+        path = (
+            get_cache_dir(cache_dir, sub_folder='datasets')
+            / f'{dataset_name}.h5'
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
 
         self.terminateds = np.zeros(self.num_envs, dtype=bool)

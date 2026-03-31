@@ -1,6 +1,8 @@
 """Utility functions for stable_worldmodel."""
 
 import os
+
+
 import shlex
 import subprocess
 import sys
@@ -23,6 +25,10 @@ def exists(val: Any) -> bool:
 def default(val: Any, d: Any) -> Any:
     """Return val if it exists, otherwise return d."""
     return val if exists(val) else d
+
+
+DEFAULT_CACHE_DIR = os.path.expanduser('~/.stable_worldmodel')
+HF_BASE_URL = 'https://huggingface.co'
 
 
 def pretraining(

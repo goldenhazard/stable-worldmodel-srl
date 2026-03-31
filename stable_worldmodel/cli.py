@@ -133,7 +133,7 @@ def datasets():
     """List all datasets in the cache directory."""
     from stable_worldmodel.data.utils import get_cache_dir
 
-    cache_dir = get_cache_dir()
+    cache_dir = get_cache_dir(sub_folder='datasets')
     table = Table(title=f'Datasets in {cache_dir}')
     table.add_column('Name', justify='left', style='cyan', no_wrap=True)
     table.add_column('Format', justify='left', style='magenta')
@@ -172,7 +172,7 @@ def inspect(
     """Show detailed info for a dataset."""
     from stable_worldmodel.data.utils import get_cache_dir
 
-    cache_dir = get_cache_dir()
+    cache_dir = get_cache_dir(sub_folder='datasets')
     h5_path = cache_dir / f'{name}.h5'
     folder_path = cache_dir / name
 
@@ -271,7 +271,7 @@ def checkpoints(
     """List model checkpoints available in the cache directory."""
     from stable_worldmodel.data.utils import get_cache_dir
 
-    cache_dir = get_cache_dir()
+    cache_dir = get_cache_dir(sub_folder='checkpoints')
     table = Table(title=f'Checkpoints in {cache_dir}')
     table.add_column('Run', justify='left', style='cyan', no_wrap=True)
     table.add_column('Checkpoint', justify='left', style='magenta')
