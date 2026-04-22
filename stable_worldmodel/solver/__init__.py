@@ -1,5 +1,6 @@
 from .cem import CEMSolver
 from .gd import GradientSolver
+from .grasp import GRASPSolver
 from .icem import ICEMSolver
 from .lagrangian import LagrangianSolver
 from .mppi import MPPISolver
@@ -10,6 +11,7 @@ __all__ = [
     'Solver',
     'GradientSolver',
     'CEMSolver',
+    'GRASPSolver',
     'ICEMSolver',
     'PGDSolver',
     'MPPISolver',

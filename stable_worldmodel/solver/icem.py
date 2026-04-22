@@ -73,8 +73,15 @@ class ICEMSolver:
         self._configured = True
 
         if isinstance(action_space, Box):
-            self._action_low = torch.tensor(action_space.low[0], device=self.device, dtype=torch.float32)
-            self._action_high = torch.tensor(action_space.high[0], device=self.device, dtype=torch.float32)
+            low = torch.tensor(action_space.low[0], device=self.device, dtype=torch.float32).flatten()
+            high = torch.tensor(action_space.high[0], device=self.device, dtype=torch.float32).flatten()
+            # Tile across action_block so bounds match flattened candidates (..., A*action_block)
+            block = getattr(config, "action_block", 1)
+            if block > 1:
+                low = low.repeat(block)
+                high = high.repeat(block)
+            self._action_low = low
+            self._action_high = high
         else:
             logging.warning(f"Action space is discrete, got {type(action_space)}. ICEMSolver may not work as expected.")
             self._action_low = None
@@ -141,6 +148,8 @@ class ICEMSolver:
             for k, v in info_dict.items():
                 v_batch = v[start_idx:end_idx]
                 if torch.is_tensor(v):
+                    # Move to device BEFORE expand (see CEMSolver for rationale).
+                    v_batch = v_batch.to(self.device, non_blocking=True)
                     v_batch = v_batch.unsqueeze(1)
                     v_batch = v_batch.expand(current_bs, self.num_samples, *v_batch.shape[2:])
                 elif isinstance(v, np.ndarray):

@@ -126,9 +126,12 @@ class CEMSolver:
                 # Slice batch
                 v_batch = v[start_idx:end_idx]
                 if torch.is_tensor(v):
+                    # Move to device BEFORE expand, so the expand creates a
+                    # zero-copy view on GPU.
+                    v_batch = v_batch.to(self.device, non_blocking=True)
                     # Add sample dim: (batch, 1, ...)
                     v_batch = v_batch.unsqueeze(1)
-                    # Expand: (batch, num_samples, ...)
+                    # Expand: (batch, num_samples, ...)  — view, stride 0 on sample dim
                     v_batch = v_batch.expand(current_bs, self.num_samples, *v_batch.shape[2:])
                 elif isinstance(v, np.ndarray):
                     v_batch = np.repeat(v_batch[:, None, ...], self.num_samples, axis=1)

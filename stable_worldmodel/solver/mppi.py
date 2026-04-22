@@ -129,6 +129,8 @@ class MPPISolver:
             for k, v in info_dict.items():
                 v_batch = v[start_idx:end_idx]
                 if torch.is_tensor(v):
+                    # Move to device BEFORE expand (see CEMSolver for rationale).
+                    v_batch = v_batch.to(self.device, non_blocking=True)
                     # Add sample dim: (batch, 1, ...)
                     v_batch = v_batch.unsqueeze(1)
                     # Expand: (batch, num_samples, ...)
