@@ -30,9 +30,9 @@ def test_plan_config_properties():
     config = PlanConfig(horizon=10, receding_horizon=5)
     assert config.horizon == 10
     assert config.receding_horizon == 5
-    assert config.history_len == 1
     assert config.action_block == 1
     assert config.warm_start is True
+    assert config.use_past_context is False
     assert config.plan_len == 10  # horizon * action_block
 
 

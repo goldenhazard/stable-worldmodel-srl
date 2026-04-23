@@ -23,6 +23,11 @@ class LeWM(nn.Module):
         self.projector = projector or nn.Identity()
         self.pred_proj = pred_proj or nn.Identity()
 
+    @property
+    def history_size(self) -> int:
+        """Number of context frames the predictor was trained with (from pos_embedding)."""
+        return self.predictor.pos_embedding.shape[1]
+
     def encode(self, info):
         """Encode observations and actions into embeddings.
         info: dict with pixels and action keys
@@ -67,9 +72,25 @@ class LeWM(nn.Module):
         assert 'pixels' in info, 'pixels not in info_dict'
         H = info['pixels'].size(2)
         B, S, T = action_sequence.shape[:3]
-        act_0, act_future = torch.split(action_sequence, [H, T - H], dim=2)
+
+        # Past-action gate: mirrors jepa.rollout. When `_past_action` is
+        # supplied, CEM sampled only future actions (T future chunks). Prepend
+        # the H-1 real past actions to act_0.
+        past_action = info.get('_past_action', None)
+        if torch.is_tensor(past_action):
+            assert past_action.shape[2] == H - 1, (
+                f"expected _past_action length {H - 1}, got {past_action.shape[2]}"
+            )
+            act_first = action_sequence[:, :, :1]
+            act_0 = torch.cat([past_action, act_first], dim=2)
+            act_future = action_sequence[:, :, 1:]
+            n_steps = T - 1
+        else:
+            act_0, act_future = torch.split(
+                action_sequence, [H, T - H], dim=2
+            )
+            n_steps = T - H
         info['action'] = act_0
-        n_steps = T - H
 
         # copy and encode initial info dict
         _init = {k: v[:, 0] for k, v in info.items() if torch.is_tensor(v)}
@@ -100,6 +121,10 @@ class LeWM(nn.Module):
         act_trunc = act_emb[:, -HS:]  # (BS, HS, A_emb)
         pred_emb = self.predict(emb_trunc, act_trunc)[:, -1:]  # (BS, 1, D)
         emb = torch.cat([emb, pred_emb], dim=1)
+
+        # Slice past-context frames off so predicted_emb[:, 0] == o_t,
+        # matching the H=1 convention the cost model assumes.
+        emb = emb[:, H - 1:, :]
 
         # unflatten batch and sample dimensions
         pred_rollout = rearrange(emb, '(b s) ... -> b s ...', b=B, s=S)

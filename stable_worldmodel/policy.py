@@ -20,16 +20,22 @@ class PlanConfig:
     Attributes:
         horizon: Planning horizon in number of steps.
         receding_horizon: Number of steps to execute before re-planning.
-        history_len: Number of past observations to consider.
         action_block: Number of times each action is repeated (frameskip).
         warm_start: Whether to use the previous plan to initialize the next one.
+        use_past_context: If True, the policy maintains a past-action buffer and
+            injects real executed past actions (paired with the env's stacked
+            history frames) into ``info_dict['_past_action']`` at replan time.
+            The flag only enables the buffer; actual injection is gated by
+            whether the buffer has accumulated ``(H-1) * action_block`` real
+            executed raw actions yet (data-driven, not config-driven). Until
+            the buffer is full, the policy falls back to the legacy H=1 path.
     """
 
     horizon: int
     receding_horizon: int
-    history_len: int = 1
     action_block: int = 1
     warm_start: bool = True
+    use_past_context: bool = False
 
     @property
     def plan_len(self) -> int:
@@ -357,6 +363,14 @@ class WorldModelPolicy(BasePolicy):
         self.transform = transform or {}
         self._action_buffer: deque[torch.Tensor] | None = None
         self._next_init: torch.Tensor | None = None
+        # Past-action buffer for WMs trained with history_size > 1. Enabled when
+        # cfg.use_past_context=True and the underlying world model exposes a
+        # history_size property. Stores raw per-env actions (shape
+        # (n_envs, raw_A)) in time order; injected as info_dict['_past_action']
+        # once full.
+        self._past_action_buffer: deque[torch.Tensor] | None = None
+        self._past_action_cap: int = 0
+        self._history_size: int = 1
 
     @property
     def flatten_receding_horizon(self) -> int:
@@ -380,6 +394,21 @@ class WorldModelPolicy(BasePolicy):
             'Solver must implement the Solver protocol'
         )
 
+        # Past-action buffer: enabled only when cfg.use_past_context=True and
+        # the underlying world model declares a history_size > 1. Buffer holds
+        # (H-1)*action_block real executed raw actions in time order.
+        use_past = getattr(self.cfg, 'use_past_context', False)
+        model = getattr(self.solver, '_model', None)
+        H = int(getattr(model, 'history_size', 1)) if model is not None else 1
+        if use_past and H > 1:
+            self._history_size = H
+            self._past_action_cap = (H - 1) * self.cfg.action_block
+            self._past_action_buffer = deque(maxlen=self._past_action_cap)
+        else:
+            self._history_size = 1
+            self._past_action_cap = 0
+            self._past_action_buffer = None
+
     def get_action(self, info_dict: dict, **kwargs: Any) -> np.ndarray:
         """Get action via planning with the world model.
 
@@ -398,6 +427,29 @@ class WorldModelPolicy(BasePolicy):
 
         # need to replan if action buffer is empty
         if len(self._action_buffer) == 0:
+            # Data-driven past-context gate. Only inject real past actions when
+            # the buffer is fully populated with actually-executed actions. If
+            # not yet full (episode start) or the feature is disabled, force
+            # the legacy H=1 path by slicing pixels to the latest frame.
+            have_full_history = (
+                self._past_action_buffer is not None
+                and len(self._past_action_buffer) == self._past_action_cap
+            )
+            if have_full_history:
+                raw_stack = torch.stack(
+                    list(self._past_action_buffer), dim=1
+                )  # (n_envs, cap, raw_A)
+                n_envs_cur = raw_stack.shape[0]
+                H = self._history_size
+                info_dict['_past_action'] = raw_stack.reshape(
+                    n_envs_cur, H - 1, -1
+                )  # (n_envs, H-1, action_block * raw_A)
+            else:
+                # Fallback: force H=1 legacy rollout path.
+                pix = info_dict.get('pixels')
+                if torch.is_tensor(pix) and pix.dim() >= 2 and pix.shape[1] > 1:
+                    info_dict['pixels'] = pix[:, -1:]
+
             outputs = self.solver(info_dict, init_action=self._next_init)
 
             actions = outputs['actions']  # (num_envs, horizon, action_dim)
@@ -414,6 +466,10 @@ class WorldModelPolicy(BasePolicy):
             self._action_buffer.extend(plan.transpose(0, 1))
 
         action = self._action_buffer.popleft()
+        # Push the raw per-env action into the past-action buffer (time order)
+        # before any reshape / numpy conversion downstream.
+        if self._past_action_buffer is not None:
+            self._past_action_buffer.append(action.detach().clone())
         action = action.reshape(*self.env.action_space.shape)
         action = action.numpy()
 
