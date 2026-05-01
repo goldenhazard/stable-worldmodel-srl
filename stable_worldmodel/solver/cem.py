@@ -40,6 +40,11 @@ class CEMSolver:
         binary_gripper: bool = False,
         env_clip_range: tuple[float, float] | list | None = None,
         projection_mode: str = "cost_only",
+        # === MPCC additions (all default None preserves MPC behavior) ===
+        physical_dim: int | None = None,
+        nu_clamp: tuple | list | None = None,
+        nu_init: float | None = None,
+        nu_var_scale: float | None = None,
     ) -> None:
         """
         Args:
@@ -84,6 +89,18 @@ class CEMSolver:
                 Only matters when ``env_clip_range`` is set AND an action
                 scaler has been injected; otherwise all three modes degrade to
                 no projection.
+            physical_dim: MPCC support. Number of leading slots in the flat
+                action_dim that are physical (rest are virtual velocity ν).
+                ``None`` (default) → all action_dim is physical (MPC behavior).
+                For cube AW MPCC: ``physical_dim=25`` (= 5 phys × action_block 5),
+                with one ν slot, total ``action_dim=26``.
+            nu_clamp: MPCC support. ``[lo, hi]`` clamp applied to ν slot at
+                every iter. Idempotent — safe to apply each iter without
+                cumulative drift. ``None`` → no ν clamp.
+            nu_init: MPCC support. Initial batch_mean for ν slot in cold-start
+                horizon timesteps. ``None`` → ν starts at 0.
+            nu_var_scale: MPCC support. Initial batch_var for ν slot.
+                ``None`` → uses ``var_scale`` for ν (same as physical).
         """
         self.model = model
         self.batch_size = batch_size
@@ -114,6 +131,13 @@ class CEMSolver:
         self._scaler_scale: torch.Tensor | None = None     # (physical_dim,)
         self._scaler_mean_tiled: torch.Tensor | None = None    # (action_dim,) cached
         self._scaler_scale_tiled: torch.Tensor | None = None   # (action_dim,) cached
+        # MPCC slot config (finalised in configure()).
+        self.physical_dim = physical_dim
+        self.nu_clamp = tuple(nu_clamp) if nu_clamp is not None else None
+        self.nu_init = nu_init
+        self.nu_var_scale = nu_var_scale
+        self._phys_slice: slice = slice(None)
+        self._nu_slice: slice | None = None
 
     def configure(self, *, action_space: gym.Space, n_envs: int, config: Any) -> None:
         """Configure the solver with environment specifications."""
@@ -126,11 +150,29 @@ class CEMSolver:
         if not isinstance(action_space, Box):
             logging.warning(f"Action space is discrete, got {type(action_space)}. CEMSolver may not work as expected.")
 
+        # MPCC slot setup. ``physical_dim`` is the FLAT count of leading phys
+        # slots (= phys_per_step × outer_action_block, e.g. 25 for cube AW).
+        # ``None`` → all action_dim is physical (MPC behavior preserved).
+        flat_action_dim = self._action_dim * config.action_block
+        if self.physical_dim is None or self.physical_dim >= flat_action_dim:
+            self._phys_slice = slice(None)
+            self._nu_slice = None
+            flat_phys_dim = flat_action_dim
+        else:
+            self._phys_slice = slice(0, self.physical_dim)
+            self._nu_slice = slice(self.physical_dim, None)
+            flat_phys_dim = self.physical_dim
+            logging.info(
+                f"[CEMSolver] MPCC mode: physical_dim={self.physical_dim} of "
+                f"flat_action_dim={flat_action_dim}; ν slot size="
+                f"{flat_action_dim - self.physical_dim}"
+            )
+
         # Finalise action_clamp into a broadcast-ready tensor of shape
-        # (action_block * physical_dim,) aligning with candidates' last dim.
-        # Scalar stays as a Python float (faster clamp kernel path). A per-dim
-        # spec is tiled across action_block so every frame inside a block gets
-        # the same per-physical-dim bound.
+        # ``(flat_phys_dim,)`` aligning with the phys slice of candidates.
+        # Scalar stays as a Python float. Per-dim spec is tiled by
+        # ``flat_phys_dim / clamp_t.numel()`` (= action_block for MPC, =
+        # outer-action_block for MPCC).
         self._clamp_tensor = None
         if self.action_clamp is not None and not isinstance(self.action_clamp, (int, float)):
             raw = self.action_clamp
@@ -138,24 +180,23 @@ class CEMSolver:
             if hasattr(raw, "_content") and not torch.is_tensor(raw):
                 raw = list(raw)
             clamp_t = torch.as_tensor(raw, dtype=torch.float32, device=self.device).flatten()
-            if clamp_t.numel() != self._action_dim:
+            if flat_phys_dim % clamp_t.numel() != 0:
                 raise ValueError(
-                    f"action_clamp per-dim length {clamp_t.numel()} must equal "
-                    f"physical action dim {self._action_dim}"
+                    f"action_clamp dim {clamp_t.numel()} must evenly divide "
+                    f"flat phys dim {flat_phys_dim}"
                 )
             if (clamp_t <= 0).any():
                 raise ValueError(f"action_clamp entries must be positive, got {clamp_t.tolist()}")
-            # Tile across action_block slots: shape (action_block * physical_dim,)
-            self._clamp_tensor = clamp_t.repeat(config.action_block).contiguous()
+            tile = flat_phys_dim // clamp_t.numel()
+            self._clamp_tensor = clamp_t.repeat(tile).contiguous()
             logging.info(
                 f"[CEMSolver] per-dim action_clamp (physical): {clamp_t.tolist()} "
-                f"(tiled to action_dim={self._clamp_tensor.numel()})"
+                f"(tiled ×{tile} → phys_dim={self._clamp_tensor.numel()})"
             )
         elif isinstance(self.action_clamp, (int, float)):
             logging.info(f"[CEMSolver] scalar action_clamp = {float(self.action_clamp)}")
 
-        # If a scaler was injected before configure(), tile its buffers now
-        # that we know action_block.
+        # If a scaler was injected before configure(), tile its buffers now.
         self._rebuild_scaler_tiled()
 
     def set_action_scaler(self, scaler: Any) -> None:
@@ -197,23 +238,32 @@ class CEMSolver:
             )
 
     def _rebuild_scaler_tiled(self) -> None:
-        """Tile (physical_dim,) scaler buffers to (action_dim,) for broadcast.
+        """Tile (per-env-phys,) scaler buffers to (flat_phys_dim,) for broadcast.
 
         Called by configure() after action_block is known and by
         set_action_scaler() after new stats are injected. No-op when either
         scaler or config is missing.
+
+        Tile factor = flat_phys_dim / scaler.numel(). This is action_block for
+        MPC (per-env-phys × action_block = action_dim) and outer-action_block
+        for MPCC (per-env-phys × outer-action_block = physical_dim).
         """
         if self._scaler_mean is None or not getattr(self, "_configured", False):
             return
-        phys = self._scaler_mean.numel()
-        if phys != self._action_dim:
+        scaler_dim = self._scaler_mean.numel()
+        # Determine target flat phys dim (MPC: full action_dim*ab; MPCC: physical_dim).
+        if self.physical_dim is not None:
+            flat_phys_dim = self.physical_dim
+        else:
+            flat_phys_dim = self._action_dim * self._config.action_block
+        if flat_phys_dim % scaler_dim != 0:
             raise ValueError(
-                f"action_scaler physical_dim {phys} != action_space physical_dim "
-                f"{self._action_dim}; scaler was fit on a different action shape."
+                f"action_scaler dim {scaler_dim} must evenly divide flat phys "
+                f"dim {flat_phys_dim}; scaler was fit on a different action shape."
             )
-        ab = self._config.action_block
-        self._scaler_mean_tiled = self._scaler_mean.repeat(ab).contiguous()
-        self._scaler_scale_tiled = self._scaler_scale.repeat(ab).contiguous()
+        tile = flat_phys_dim // scaler_dim
+        self._scaler_mean_tiled = self._scaler_mean.repeat(tile).contiguous()
+        self._scaler_scale_tiled = self._scaler_scale.repeat(tile).contiguous()
 
     def _project_env(self, x: torch.Tensor) -> torch.Tensor:
         """Env-space projection: denorm → clip(env_clip_range) → renorm.
@@ -254,14 +304,24 @@ class CEMSolver:
     def init_action_distrib(
         self, actions: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Initialize the action distribution parameters (mean and variance)."""
+        """Initialize the action distribution parameters (mean and variance).
+
+        MPCC: ν slot gets ``nu_init`` mean and ``nu_var_scale`` var when set
+        (cold-start slots only). Phys slot uses default zeros mean and
+        ``var_scale`` var. MPC path (``_nu_slice is None``) is unchanged.
+        """
         var = self.var_scale * torch.ones([self.n_envs, self.horizon, self.action_dim])
+        if self._nu_slice is not None and self.nu_var_scale is not None:
+            var[..., self._nu_slice] = self.nu_var_scale
+
         mean = torch.zeros([self.n_envs, 0, self.action_dim]) if actions is None else actions
 
         remaining = self.horizon - mean.shape[1]
         if remaining > 0:
             device = mean.device
             new_mean = torch.zeros([self.n_envs, remaining, self.action_dim])
+            if self._nu_slice is not None and self.nu_init is not None:
+                new_mean[..., self._nu_slice] = self.nu_init
             mean = torch.cat([mean, new_mean], dim=1).to(device)
 
         return mean, var
@@ -338,56 +398,94 @@ class CEMSolver:
                 candidates[:, 0] = batch_mean
 
                 # Shaping pipeline applied IN ORDER on sampled candidates:
-                #   1. norm-space clamp (action_clamp)
-                #   2. env-space projection (scaler + env_clip_range)
-                #   3. binary gripper (sign snap, last physical dim)
-                # Each stage is opt-in via __init__ kwargs; all None/False
-                # preserves vanilla CEM behaviour.
-                if self._clamp_tensor is not None:
-                    candidates = torch.clamp(
-                        candidates,
-                        min=-self._clamp_tensor,
-                        max=self._clamp_tensor,
-                    )
-                elif isinstance(self.action_clamp, (int, float)):
-                    candidates = candidates.clamp(-self.action_clamp, self.action_clamp)
+                #   1. norm-space clamp (action_clamp)        → phys slot
+                #   2. env-space projection (scaler + clip)   → phys slot
+                #   3. binary gripper (sign snap, last phys)  → phys slot (MPC only)
+                #   4. ν clamp (nu_clamp)                      → ν slot (MPCC only)
+                # MPC path (``_nu_slice is None``): all shaping operates on the
+                # full ``candidates`` (phys_slice = slice(None) is a no-op view).
+                # MPCC path (``_nu_slice is not None``): shaping on phys slice
+                # only via ``candidates[..., _phys_slice]``; ν is clamped
+                # separately. Single ``candidates`` tensor preserves
+                # cost==elite invariant.
+                if self._nu_slice is None:
+                    # === MPC path (verbatim original behavior) ===
+                    if self._clamp_tensor is not None:
+                        candidates = torch.clamp(
+                            candidates,
+                            min=-self._clamp_tensor,
+                            max=self._clamp_tensor,
+                        )
+                    elif isinstance(self.action_clamp, (int, float)):
+                        candidates = candidates.clamp(-self.action_clamp, self.action_clamp)
 
-                # Env-space projection — mode-dependent:
-                # - "state"     : project candidates IN PLACE. Elites inherit
-                #                 projected values → mean bounded to env range.
-                # - "cost_only" : project a COPY only for cost eval. Elites
-                #                 use pre-projection candidates → mean free
-                #                 to drift past env boundary. WM still sees
-                #                 in-distribution actions via the copy.
-                # - "none"      : no projection.
-                if self.projection_mode == "state":
-                    candidates = self._project_env(candidates)
-                    cost_candidates = candidates
-                elif (self.projection_mode == "cost_only"
-                        and self._scaler_mean_tiled is not None
-                        and self.env_clip_range is not None):
-                    cost_candidates = self._project_env(candidates)
+                    # Env-space projection — mode-dependent:
+                    # - "state"     : project candidates IN PLACE. Elites inherit
+                    #                 projected values → mean bounded to env range.
+                    # - "cost_only" : project a COPY only for cost eval. Elites
+                    #                 use pre-projection candidates → mean free
+                    #                 to drift past env boundary. WM still sees
+                    #                 in-distribution actions via the copy.
+                    # - "none"      : no projection.
+                    if self.projection_mode == "state":
+                        candidates = self._project_env(candidates)
+                        cost_candidates = candidates
+                    elif (self.projection_mode == "cost_only"
+                            and self._scaler_mean_tiled is not None
+                            and self.env_clip_range is not None):
+                        cost_candidates = self._project_env(candidates)
+                    else:
+                        cost_candidates = candidates
+
+                    # Binarize gripper: snap the LAST physical-dim entry of every
+                    # action_block slice to sign(x) so gripper is ±1 (hard
+                    # open/close). Prevents "partial release after grab" where
+                    # intermediate gripper values cause unreliable grasp
+                    # maintenance. Applied AFTER clamp so binary values (±1)
+                    # persist even if clamp < 1 on other dims.
+                    if self.binary_gripper:
+                        physical_dim = self._action_dim
+                        action_block = self._config.action_block
+                        shape = candidates.shape          # (B, S, H, ab*pd)
+                        cand_r = candidates.reshape(*shape[:-1], action_block, physical_dim)
+                        grip = cand_r[..., -1]            # (B, S, H, ab)
+                        # sign(0) = 0; use >=0 → +1 else -1 to avoid the zero case
+                        binarized = torch.where(
+                            grip >= 0, torch.ones_like(grip), -torch.ones_like(grip)
+                        )
+                        cand_r = torch.cat([cand_r[..., :-1], binarized.unsqueeze(-1)], dim=-1)
+                        candidates = cand_r.reshape(shape)
                 else:
-                    cost_candidates = candidates
+                    # === MPCC path: shape phys slice only, ν via nu_clamp ===
+                    phys = candidates[..., self._phys_slice]
+                    # 1. norm-space clamp on phys
+                    if self._clamp_tensor is not None:
+                        phys = torch.clamp(
+                            phys,
+                            min=-self._clamp_tensor,
+                            max=self._clamp_tensor,
+                        )
+                    elif isinstance(self.action_clamp, (int, float)):
+                        phys = phys.clamp(-self.action_clamp, self.action_clamp)
+                    # 2. env-space projection on phys (state/cost_only treated
+                    #    the same for MPCC — always in-place; cost_only mode
+                    #    not supported in MPCC. "none" skips projection.)
+                    if (self.projection_mode != "none"
+                            and self._scaler_mean_tiled is not None
+                            and self.env_clip_range is not None):
+                        phys = self._project_env(phys)
+                    # 3. binary_gripper: skipped for MPCC (would conflict with
+                    #    ν semantics; MPCC yaml should set binary_gripper=False).
+                    candidates[..., self._phys_slice] = phys
 
-                # Binarize gripper: snap the LAST physical-dim entry of every
-                # action_block slice to sign(x) so gripper is ±1 (hard
-                # open/close). Prevents "partial release after grab" where
-                # intermediate gripper values cause unreliable grasp
-                # maintenance. Applied AFTER clamp so binary values (±1)
-                # persist even if clamp < 1 on other dims.
-                if self.binary_gripper:
-                    physical_dim = self._action_dim
-                    action_block = self._config.action_block
-                    shape = candidates.shape          # (B, S, H, ab*pd)
-                    cand_r = candidates.reshape(*shape[:-1], action_block, physical_dim)
-                    grip = cand_r[..., -1]            # (B, S, H, ab)
-                    # sign(0) = 0; use >=0 → +1 else -1 to avoid the zero case
-                    binarized = torch.where(
-                        grip >= 0, torch.ones_like(grip), -torch.ones_like(grip)
-                    )
-                    cand_r = torch.cat([cand_r[..., :-1], binarized.unsqueeze(-1)], dim=-1)
-                    candidates = cand_r.reshape(shape)
+                    # 4. ν clamp (idempotent, safe to apply each iter)
+                    if self.nu_clamp is not None:
+                        nu = candidates[..., self._nu_slice]
+                        nu = nu.clamp(*self.nu_clamp)
+                        candidates[..., self._nu_slice] = nu
+
+                    # cost == elite: single candidates tensor.
+                    cost_candidates = candidates
 
                 current_info = expanded_infos.copy()
 
@@ -422,37 +520,51 @@ class CEMSolver:
                 # Even if candidates are clamped, mean could still drift if
                 # the elite distribution is asymmetric near the boundary.
                 # Explicit mean clamp + env projection guarantees bounds.
-                if self._clamp_tensor is not None:
-                    batch_mean = torch.clamp(
-                        batch_mean,
-                        min=-self._clamp_tensor,
-                        max=self._clamp_tensor,
-                    )
-                elif isinstance(self.action_clamp, (int, float)):
-                    batch_mean = batch_mean.clamp(-self.action_clamp, self.action_clamp)
+                if self._nu_slice is None:
+                    # MPC path: full batch_mean clamp (verbatim original)
+                    if self._clamp_tensor is not None:
+                        batch_mean = torch.clamp(
+                            batch_mean,
+                            min=-self._clamp_tensor,
+                            max=self._clamp_tensor,
+                        )
+                    elif isinstance(self.action_clamp, (int, float)):
+                        batch_mean = batch_mean.clamp(-self.action_clamp, self.action_clamp)
 
-                # In ``projection_mode="state"`` batch_mean is already bounded
-                # because elite candidates were projected before the elite
-                # gather. In ``projection_mode="cost_only"`` we INTENTIONALLY
-                # skip mean projection — the whole point of the mode is to
-                # let the mean drift past the env boundary while only the
-                # cost-eval copy is in-distribution. See __init__ docstring.
-
-                # Binarize mean's gripper dim too — elite mean of {-1, +1}
-                # samples is in (-1, +1) interior, which defeats binarization.
-                # Snap mean back to ±1 so next iter's sampling is centered on
-                # a binary gripper.
-                if self.binary_gripper:
-                    physical_dim = self._action_dim
-                    action_block = self._config.action_block
-                    shape = batch_mean.shape          # (B, H, ab*pd)
-                    mean_r = batch_mean.reshape(*shape[:-1], action_block, physical_dim)
-                    grip = mean_r[..., -1]
-                    binarized = torch.where(
-                        grip >= 0, torch.ones_like(grip), -torch.ones_like(grip)
-                    )
-                    mean_r = torch.cat([mean_r[..., :-1], binarized.unsqueeze(-1)], dim=-1)
-                    batch_mean = mean_r.reshape(shape)
+                    # Binarize mean's gripper dim too — elite mean of {-1, +1}
+                    # samples is in (-1, +1) interior, which defeats binarization.
+                    # Snap mean back to ±1 so next iter's sampling is centered on
+                    # a binary gripper.
+                    if self.binary_gripper:
+                        physical_dim = self._action_dim
+                        action_block = self._config.action_block
+                        shape = batch_mean.shape          # (B, H, ab*pd)
+                        mean_r = batch_mean.reshape(*shape[:-1], action_block, physical_dim)
+                        grip = mean_r[..., -1]
+                        binarized = torch.where(
+                            grip >= 0, torch.ones_like(grip), -torch.ones_like(grip)
+                        )
+                        mean_r = torch.cat([mean_r[..., :-1], binarized.unsqueeze(-1)], dim=-1)
+                        batch_mean = mean_r.reshape(shape)
+                else:
+                    # MPCC path: clamp phys mean and ν mean separately.
+                    if self._clamp_tensor is not None:
+                        phys_mean = batch_mean[..., self._phys_slice]
+                        phys_mean = torch.clamp(
+                            phys_mean,
+                            min=-self._clamp_tensor,
+                            max=self._clamp_tensor,
+                        )
+                        batch_mean[..., self._phys_slice] = phys_mean
+                    elif isinstance(self.action_clamp, (int, float)):
+                        phys_mean = batch_mean[..., self._phys_slice]
+                        phys_mean = phys_mean.clamp(-self.action_clamp, self.action_clamp)
+                        batch_mean[..., self._phys_slice] = phys_mean
+                    # ν mean clamp: keeps next-iter sampling within nu_clamp.
+                    if self.nu_clamp is not None:
+                        nu_mean = batch_mean[..., self._nu_slice]
+                        nu_mean = nu_mean.clamp(*self.nu_clamp)
+                        batch_mean[..., self._nu_slice] = nu_mean
 
                 # Update final cost for logging
                 # We average the cost of the top elites
