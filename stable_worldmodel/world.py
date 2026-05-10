@@ -957,10 +957,19 @@ class World:
             (self.num_envs, eval_budget, *self.infos['pixels'].shape[-3:]),
             dtype=np.uint8,
         )
+        # Optional wrist-view recording (mirror agent-view shape). Filled only
+        # when 'wrist_pixels' is present in infos (cube AW MV setup).
+        record_wrist = 'wrist_pixels' in self.infos
+        wrist_frames = (
+            np.empty((self.num_envs, eval_budget, *self.infos['wrist_pixels'].shape[-3:]),
+                     dtype=np.uint8) if record_wrist else None
+        )
 
         # run normal evaluation for eval_budget and record video
         for i in range(eval_budget):
             video_frames[:, i] = self.infos['pixels'][:, -1]
+            if record_wrist:
+                wrist_frames[:, i] = self.infos['wrist_pixels'][:, -1]
             self.infos.update(deepcopy(goal_step))
             self.step()
             results['episode_successes'] = np.logical_or(
@@ -970,6 +979,8 @@ class World:
             self.envs.unwrapped._autoreset_envs = np.zeros((self.num_envs,))
 
         video_frames[:, -1] = self.infos['pixels'][:, -1]
+        if record_wrist:
+            wrist_frames[:, -1] = self.infos['wrist_pixels'][:, -1]
 
         n_episodes = len(episodes_idx)
 
@@ -993,10 +1004,34 @@ class World:
                 )
                 goals = np.vstack([target_frames[i, -1], target_frames[i, -1]])
                 for t in range(eval_budget):
+                    # Layout: [agent_rollout | target_agent | goal_agent]
+                    #         [wrist_rollout | wrist_target_blank | wrist_blank]
                     stacked_frame = np.vstack(
                         [video_frames[i, t], target_frames[i, t % target_len]]
                     )
                     frame = np.hstack([stacked_frame, goals])
+                    if record_wrist:
+                        H, W = wrist_frames.shape[-3], wrist_frames.shape[-2]
+                        wrist_blank = np.zeros((H, W, 3), dtype=np.uint8)
+                        wrist_row = np.hstack([wrist_frames[i, t], wrist_blank, wrist_blank])
+                        # Resize to match agent-view total width if needed
+                        if wrist_row.shape[1] != frame.shape[1]:
+                            scale = frame.shape[1] / wrist_row.shape[1]
+                            new_h = int(wrist_row.shape[0] * scale)
+                            try:
+                                from PIL import Image
+                                wrist_row = np.asarray(
+                                    Image.fromarray(wrist_row).resize((frame.shape[1], new_h),
+                                                                      Image.BILINEAR)
+                                )
+                            except ImportError:
+                                # Fallback: just pad/crop
+                                if wrist_row.shape[1] < frame.shape[1]:
+                                    pad = frame.shape[1] - wrist_row.shape[1]
+                                    wrist_row = np.pad(wrist_row, ((0,0),(0,pad),(0,0)))
+                                else:
+                                    wrist_row = wrist_row[:, :frame.shape[1]]
+                        frame = np.vstack([frame, wrist_row])
                     out.append_data(frame)
                 out.close()
             print(f'Video saved to {video_path_obj}')

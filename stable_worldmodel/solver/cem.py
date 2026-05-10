@@ -380,6 +380,24 @@ class CEMSolver:
             # default; see "Enabling per-iter diagnostics" comment below.
             iter_cost_history: list[list[float]] = []
 
+            # Init / final elite-mean capture for the
+            # ``[env i] cost A / l2 X → B / l2 Y`` log line.
+            # ``cost`` = weighted total (already in topk_vals).
+            # ``l2``   = raw contour / tracking term, fetched from
+            # ``cost_model._last_breakdown[{tracking_raw|contour_raw}]``
+            # (MPC: tracking_raw = Σ_t d(z_pred, z_ref); MPCC: contour_raw =
+            # Σ_t ‖z_pred − z_ref‖²). Either key — whichever is present.
+            init_total_per_env: torch.Tensor | None = None
+            init_l2_per_env: torch.Tensor | None = None
+            final_l2_per_env: torch.Tensor | None = None
+            # Phys / ν elite-mean stats for the log line. ``|a|`` = mean abs of
+            # the phys slice over (H, A_phys) per env; ``ν`` = mean of the ν
+            # slice over H per env. ν is None for MPC (``_nu_slice is None``).
+            init_aabs_per_env: torch.Tensor | None = None
+            final_aabs_per_env: torch.Tensor | None = None
+            init_nu_per_env: torch.Tensor | None = None
+            final_nu_per_env: torch.Tensor | None = None
+
             for step in range(self.n_steps):
                 # Sample action sequences: (Batch, Num_Samples, Horizon, Dim)
                 candidates = torch.randn(
@@ -571,9 +589,77 @@ class CEMSolver:
                 final_batch_cost = topk_vals.mean(dim=1).cpu().tolist()
                 iter_cost_history.append(final_batch_cost)
 
+                # Capture init / final elite-mean L2 (raw contour term) for
+                # the per-env log line. weighted total at first iter caches
+                # via ``init_total_per_env``; at last iter, ``final_batch_cost``
+                # itself is the weighted total. ``getattr(self.model,
+                # "_last_breakdown", {})`` is empty for cost models that
+                # don't populate it → l2 stays None and the log line shows nan.
+                if step == 0 or step == self.n_steps - 1:
+                    bd = getattr(self.model, "_last_breakdown", {}) or {}
+                    raw_l2 = bd.get("tracking_raw")
+                    if raw_l2 is None:
+                        raw_l2 = bd.get("contour_raw")
+                    # Phys / ν elite-mean stats from batch_mean (= updated
+                    # topk_candidates.mean above). For MPCC, _phys_slice
+                    # selects phys; _nu_slice selects ν. For MPC, _phys_slice
+                    # = slice(None) and _nu_slice = None.
+                    phys_mean_now = batch_mean[..., self._phys_slice]
+                    aabs_now = phys_mean_now.abs().mean(dim=(-1, -2)).detach().cpu()
+                    nu_now = None
+                    if self._nu_slice is not None:
+                        nu_mean_now = batch_mean[..., self._nu_slice]
+                        nu_now = nu_mean_now.mean(dim=(-1, -2)).detach().cpu()
+                    if step == 0:
+                        init_total_per_env = topk_vals.mean(dim=1).detach().cpu()
+                        init_aabs_per_env = aabs_now
+                        init_nu_per_env = nu_now
+                        if raw_l2 is not None:
+                            init_l2_per_env = raw_l2.gather(1, topk_inds).mean(dim=1).detach().cpu()
+                    if step == self.n_steps - 1:
+                        final_aabs_per_env = aabs_now
+                        final_nu_per_env = nu_now
+                        if raw_l2 is not None:
+                            final_l2_per_env = raw_l2.gather(1, topk_inds).mean(dim=1).detach().cpu()
+
             # Write results back to global storage
             mean[start_idx:end_idx] = batch_mean
             var[start_idx:end_idx] = batch_var
+
+            # Per-env init→final convergence line (one row per env in this batch).
+            # weighted total = ``cost``; raw L2 (tracking-only) = ``l2``;
+            # ν = elite-mean ν (MPCC only); |a| = elite-mean |phys|.
+            for _b in range(current_bs):
+                _env_g = start_idx + _b
+                _it = (init_total_per_env[_b].item()
+                       if init_total_per_env is not None else float("nan"))
+                _il = (init_l2_per_env[_b].item()
+                       if init_l2_per_env is not None else float("nan"))
+                _ia = (init_aabs_per_env[_b].item()
+                       if init_aabs_per_env is not None else float("nan"))
+                _in = (init_nu_per_env[_b].item()
+                       if init_nu_per_env is not None else None)
+                _ft = final_batch_cost[_b]
+                _fl = (final_l2_per_env[_b].item()
+                       if final_l2_per_env is not None else float("nan"))
+                _fa = (final_aabs_per_env[_b].item()
+                       if final_aabs_per_env is not None else float("nan"))
+                _fn = (final_nu_per_env[_b].item()
+                       if final_nu_per_env is not None else None)
+                if _in is not None and _fn is not None:
+                    print(
+                        f"  [env {_env_g}] cost {_it:.4f} / l2 {_il:.4f} / "
+                        f"ν {_in:.3f} / |a| {_ia:.3f}  →  "
+                        f"{_ft:.4f} / l2 {_fl:.4f} / ν {_fn:.3f} / |a| {_fa:.3f}  "
+                        f"({self.n_steps} iters)"
+                    )
+                else:
+                    print(
+                        f"  [env {_env_g}] cost {_it:.4f} / l2 {_il:.4f} / "
+                        f"|a| {_ia:.3f}  →  "
+                        f"{_ft:.4f} / l2 {_fl:.4f} / |a| {_fa:.3f}  "
+                        f"({self.n_steps} iters)"
+                    )
 
             # Store history/metadata
             outputs["costs"].extend(final_batch_cost)
@@ -583,6 +669,17 @@ class CEMSolver:
             outputs.setdefault("iter_cost_history", []).extend(
                 [[row[b] for row in iter_cost_history] for b in range(current_bs)]
             )
+
+            # Per-env init/final raw L2 + |a| + ν elite-mean stats. None →
+            # NaN so the per-env list shape is uniform across batches.
+            def _to_list(t, n):
+                return t.tolist() if t is not None else [float("nan")] * n
+            outputs.setdefault("init_l2",   []).extend(_to_list(init_l2_per_env,   current_bs))
+            outputs.setdefault("final_l2",  []).extend(_to_list(final_l2_per_env,  current_bs))
+            outputs.setdefault("init_aabs", []).extend(_to_list(init_aabs_per_env, current_bs))
+            outputs.setdefault("final_aabs",[]).extend(_to_list(final_aabs_per_env,current_bs))
+            outputs.setdefault("init_nu",   []).extend(_to_list(init_nu_per_env,   current_bs))
+            outputs.setdefault("final_nu",  []).extend(_to_list(final_nu_per_env,  current_bs))
 
         outputs["actions"] = mean.detach().cpu()
         outputs["mean"] = [mean.detach().cpu()]
