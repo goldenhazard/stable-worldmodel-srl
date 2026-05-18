@@ -45,6 +45,7 @@ class CEMSolver:
         nu_clamp: tuple | list | None = None,
         nu_init: float | None = None,
         nu_var_scale: float | None = None,
+        phys_per_step: int | None = None,
     ) -> None:
         """
         Args:
@@ -101,6 +102,15 @@ class CEMSolver:
                 horizon timesteps. ``None`` → ν starts at 0.
             nu_var_scale: MPCC support. Initial batch_var for ν slot.
                 ``None`` → uses ``var_scale`` for ν (same as physical).
+            phys_per_step: Env action dim per env-step — required to locate the
+                gripper dim within a flat phys block of shape
+                ``(outer_action_block × phys_per_step)``. ``None`` (default)
+                falls back to ``_action_dim`` (correct for MPC, where the
+                action_space passed to CEM IS the env action space). MPCC must
+                set this explicitly (the inner CEM sees an augmented
+                action_dim that includes ν, so ``_action_dim`` is wrong);
+                ``latent_mpcc.MPCCSolver.configure`` injects the correct value
+                programmatically.
         """
         self.model = model
         self.batch_size = batch_size
@@ -138,6 +148,12 @@ class CEMSolver:
         self.nu_var_scale = nu_var_scale
         self._phys_slice: slice = slice(None)
         self._nu_slice: slice | None = None
+        # Gripper-layout helper. ``phys_per_step`` is the env action dim per
+        # env-step (5 for cube, 2 for PushT). ``_phys_per_step`` is finalised
+        # in configure() — defaults to _action_dim for MPC, must be set
+        # explicitly for MPCC.
+        self.phys_per_step = phys_per_step
+        self._phys_per_step: int = 0   # finalised in configure()
 
     def configure(self, *, action_space: gym.Space, n_envs: int, config: Any) -> None:
         """Configure the solver with environment specifications."""
@@ -166,6 +182,19 @@ class CEMSolver:
                 f"[CEMSolver] MPCC mode: physical_dim={self.physical_dim} of "
                 f"flat_action_dim={flat_action_dim}; ν slot size="
                 f"{flat_action_dim - self.physical_dim}"
+            )
+
+        # Finalise phys_per_step (gripper-dim layout helper). MPC default =
+        # _action_dim (action_space passed to CEM IS env action space).
+        # MPCC must inject the env action dim explicitly because inner CEM
+        # sees an augmented action_dim that includes ν.
+        self._phys_per_step = (
+            self._action_dim if self.phys_per_step is None else int(self.phys_per_step)
+        )
+        if flat_phys_dim % self._phys_per_step != 0:
+            raise ValueError(
+                f"phys_per_step={self._phys_per_step} must evenly divide flat "
+                f"phys dim {flat_phys_dim}"
             )
 
         # Finalise action_clamp into a broadcast-ready tensor of shape
