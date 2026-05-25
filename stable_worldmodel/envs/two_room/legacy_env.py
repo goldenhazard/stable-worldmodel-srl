@@ -3,6 +3,8 @@
 A simple two-room navigation environment where an agent must navigate
 through a door opening to reach a target position.
 """
+from __future__ import annotations
+
 
 import math
 import cv2

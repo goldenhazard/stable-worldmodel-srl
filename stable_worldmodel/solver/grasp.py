@@ -20,6 +20,8 @@ The model passed to :class:`GRASPSolver` must expose:
 Embeddings are computed automatically via ``model.encode()`` at the
 start of each solve call.
 """
+from __future__ import annotations
+
 
 import time
 from typing import Any

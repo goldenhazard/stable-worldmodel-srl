@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,7 +9,11 @@ from collections.abc import Callable
 import numpy as np
 import torch
 from loguru import logger as logging
-from torchvision import tv_tensors
+try:
+    from torchvision import tv_tensors
+except ImportError:
+    # older torchvision (<0.17); only the .transform path uses tv_tensors
+    tv_tensors = None
 
 import stable_worldmodel as swm
 from stable_worldmodel.solver import Solver

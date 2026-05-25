@@ -1,4 +1,6 @@
 """World environment manager for vectorized Gymnasium environments."""
+from __future__ import annotations
+
 
 import hashlib
 import json

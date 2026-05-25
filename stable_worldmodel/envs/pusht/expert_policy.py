@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 
 from stable_worldmodel.policy import BasePolicy

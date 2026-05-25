@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import gymnasium as gym
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 from ogbench.manipspace.oracles.markov.button_markov import ButtonMarkovOracle
 from ogbench.manipspace.oracles.markov.cube_markov import CubeMarkovOracle

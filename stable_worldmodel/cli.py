@@ -1,4 +1,6 @@
 """Stable World Model CLI commands."""
+from __future__ import annotations
+
 
 from importlib.metadata import version as pkg_version
 

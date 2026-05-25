@@ -4,11 +4,25 @@ import numpy as np
 import pygame
 import pymunk
 import pymunk.pygame_util
+import shapely.geometry as sg
 from gymnasium import spaces
 from pymunk.vec2d import Vec2d
 
 from stable_worldmodel import spaces as swm_spaces
 from ..utils import DrawOptions
+
+
+def _pymunk_to_shapely(body, shapes):
+    """Convert a pymunk Poly body+shapes to a shapely MultiPolygon (world frame)."""
+    geoms = []
+    for shape in shapes:
+        if isinstance(shape, pymunk.shapes.Poly):
+            verts = [body.local_to_world(v) for v in shape.get_vertices()]
+            verts += [verts[0]]
+            geoms.append(sg.Polygon(verts))
+        else:
+            raise RuntimeError(f"Unsupported shape type {type(shape)}")
+    return sg.MultiPolygon(geoms)
 
 
 DEFAULT_VARIATIONS = (
@@ -339,10 +353,29 @@ class PushT(gym.Env):
 
         # compute reward and termination
         terminated, distance = self.eval_state(self.goal_state, state)
-        reward = -distance  # the closer the better
+        reward = -distance  # the closer the better (existing semantics, preserved)
+
+        # coverage + score now provided by _get_info() (added there so reset path also has them,
+        # which keeps swm.World.record_dataset per-step column lengths aligned)
 
         truncated = False
         return observation, reward, terminated, truncated, info
+
+    def _get_coverage(self) -> float:
+        """Fraction of goal-T zone overlapped by the block-T (DP-paper convention).
+
+        Returns ∈ [0, 1]. 1.0 means block fully covers goal zone.
+        """
+        # Goal body uses goal_pose [x, y, theta]
+        goal_pose = np.array([
+            self.goal_state[2], self.goal_state[3], self.goal_state[4]
+        ], dtype=np.float64)
+        goal_body = self._get_goal_pose_body(goal_pose)
+        goal_geom = _pymunk_to_shapely(goal_body, self.block.shapes)
+        block_geom = _pymunk_to_shapely(self.block, self.block.shapes)
+        intersection_area = goal_geom.intersection(block_geom).area
+        goal_area = goal_geom.area
+        return float(intersection_area / goal_area) if goal_area > 0 else 0.0
 
     def eval_state(self, goal_state, cur_state):
         # success if position difference is < 20, and angle difference < np.pi/9
@@ -386,6 +419,13 @@ class PushT(gym.Env):
             (self.goal_state[:2], self.goal_state[-2:])
         )
 
+        # DP-paper-compatible coverage + score (block-T ∩ goal-T overlap fraction)
+        try:
+            coverage = self._get_coverage()
+        except Exception:
+            coverage = 0.0
+        score = float(np.clip(coverage / 0.95, 0.0, 1.0))
+
         info = {
             'env_name': self.env_name,
             'pos_agent': np.array(self.agent.position),
@@ -398,6 +438,8 @@ class PushT(gym.Env):
             'goal_proprio': goal_proprio,
             'n_contacts': n_contact_points_per_step,
             'goal': self._goal,
+            'coverage': float(coverage),
+            'score': float(score),
         }
 
         return info
