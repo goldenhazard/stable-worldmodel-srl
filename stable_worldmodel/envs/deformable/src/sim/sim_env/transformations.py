@@ -167,7 +167,8 @@ True
 
 """
 
-from __future__ import division
+# `from __future__ import division` removed (Py3 has true division by default;
+# leaving it here triggers SyntaxError because L1 already has another __future__).
 
 import warnings
 import math
