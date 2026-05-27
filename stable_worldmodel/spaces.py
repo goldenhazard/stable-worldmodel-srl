@@ -809,7 +809,7 @@ class Dict(spaces.Dict):
         def _tree(d: dict[Any, spaces.Space], indent: int = 0) -> str:
             lines = []
             for k, v in d.items():
-                if isinstance(v, (dict | self.__class__ | spaces.Dict)):
+                if isinstance(v, (dict, self.__class__, spaces.Dict)):  # py39 compat
                     lines.append('    ' * indent + f'{k}:')
                     # handle spaces.Dict which has .spaces
                     sub_dict = v.spaces if isinstance(v, spaces.Dict) else v

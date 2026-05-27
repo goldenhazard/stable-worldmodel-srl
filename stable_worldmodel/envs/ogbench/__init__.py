@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .cube_env import CubeEnv
 from .expert_policy import ExpertPolicy
 from .pointmaze_env import PointMazeEnv

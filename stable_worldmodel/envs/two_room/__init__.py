@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .env import TwoRoomEnv
 from .expert_policy import ExpertPolicy
 

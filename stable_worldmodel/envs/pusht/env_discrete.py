@@ -1,3 +1,4 @@
+from __future__ import annotations
 from gymnasium import spaces
 
 from ..quantizer import PolarQuantizer

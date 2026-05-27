@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .loss import *  # noqa: F403
 from .utils import *  # noqa: F403
 

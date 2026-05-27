@@ -385,7 +385,7 @@ class AddPixelsWrapper(gym.Wrapper):
 
         if isinstance(img, dict):
             pixels = {f'pixels.{k}': _process_img(v) for k, v in img.items()}
-        elif isinstance(img, (list | tuple)):
+        elif isinstance(img, (list, tuple)):  # py39 compat: tuple, not PEP 604 union
             pixels = {
                 f'pixels.{i}': _process_img(v) for i, v in enumerate(img)
             }

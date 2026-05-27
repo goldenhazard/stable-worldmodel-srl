@@ -822,14 +822,14 @@ class World:
                     # permute channel to be last
                     ep[col] = ep[col].permute(0, 2, 3, 1)
 
-                if not isinstance(ep[col], (torch.Tensor | np.ndarray)):
+                if not isinstance(ep[col], (torch.Tensor, np.ndarray)):  # py39 compat
                     continue
 
                 init_data = ep[col][0]
                 goal_data = ep[col][-1]
 
                 # TODO handle that better
-                if not isinstance(init_data, (np.ndarray | torch.Tensor)):
+                if not isinstance(init_data, (np.ndarray, torch.Tensor)):  # py39 compat
                     logging.warning(
                         f'Data type {type(init_data)} for column {col} not supported, yet skipping conversion'
                     )

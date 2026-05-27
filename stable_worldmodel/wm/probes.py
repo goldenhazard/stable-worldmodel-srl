@@ -1,4 +1,5 @@
 """Helper functions for probing wm latent spaces."""
+from __future__ import annotations
 
 import torch
 from torch import nn

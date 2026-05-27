@@ -2,6 +2,7 @@
 Expert Policy wrapper for GNC Controller
 Integrates the RocketLandingGNC controller with the stable-worldmodel-flights framework
 """
+from __future__ import annotations
 
 import time
 from collections import deque

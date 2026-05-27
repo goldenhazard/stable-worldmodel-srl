@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .env import SimpleNavigationEnv
 from .expert_policy import ExpertPolicy
 

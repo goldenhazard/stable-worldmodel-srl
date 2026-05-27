@@ -29,6 +29,7 @@ Example:
 .. _OGBench:
    https://github.com/seohongpark/ogbench/
 """
+from __future__ import annotations
 
 import mujoco
 import numpy as np

@@ -146,7 +146,7 @@ class BasePolicy:
             ValueError: If an expected numpy array is missing for processing.
         """
         for k, v in info_dict.items():
-            is_numpy = isinstance(v, (np.ndarray | np.generic))
+            is_numpy = isinstance(v, (np.ndarray, np.generic))  # py39 compat
 
             if hasattr(self, 'process') and k in self.process:
                 if not is_numpy:
@@ -180,7 +180,7 @@ class BasePolicy:
                 v = torch.stack(
                     [self.transform[k](tv_tensors.Image(x)) for x in v]
                 )
-                is_numpy = isinstance(v, (np.ndarray | np.generic))
+                is_numpy = isinstance(v, (np.ndarray, np.generic))  # py39 compat
 
                 if shape is not None:
                     v = v.reshape(*shape[:2], *v.shape[1:])

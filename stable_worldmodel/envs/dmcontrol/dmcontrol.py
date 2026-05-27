@@ -1,3 +1,4 @@
+from __future__ import annotations
 # wrapper adapted from https://github.com/nicklashansen/newt/blob/main/tdmpc2/envs/dmcontrol.py
 
 import gymnasium as gym

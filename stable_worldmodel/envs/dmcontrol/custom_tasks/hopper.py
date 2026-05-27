@@ -1,3 +1,4 @@
+from __future__ import annotations
 # Adapted from https://github.com/nicklashansen/newt/blob/main/tdmpc2/envs/dmcontrol.py
 from dm_control.suite import hopper
 from dm_control.utils import rewards

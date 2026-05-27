@@ -1,3 +1,4 @@
+from __future__ import annotations
 from stable_worldmodel import (
     data,
     envs,
