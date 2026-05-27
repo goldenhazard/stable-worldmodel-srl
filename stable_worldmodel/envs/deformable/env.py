@@ -134,7 +134,7 @@ class DeformableEnv(gym.Env):
             "state": np.zeros((0,), dtype=np.float32),
         }
         info = self._build_info(pixels)
-        info["state"] = self._last_state
+        info["particle_state"] = self._last_state  # avoid collision with obs['state']
         return observation, info
 
     def step(self, action):
