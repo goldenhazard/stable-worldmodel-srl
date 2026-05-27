@@ -797,8 +797,14 @@ class SyncWorld(gym.vector.SyncVectorEnv):
         self._autoreset_envs = np.zeros((self.num_envs,), dtype=np.bool_)
 
         infos = {}
+        # `zip(..., strict=True)` is Py 3.10+; emulate it for Py 3.9 compat
+        # (the deformable eval pipeline pins Py 3.9 due to the PyFleX .so ABI).
+        assert len(self.envs) == len(seed) == len(options_list), (
+            f"length mismatch: envs={len(self.envs)}, seeds={len(seed)}, "
+            f"options={len(options_list)}"
+        )
         for i, (env, single_seed, single_options) in enumerate(
-            zip(self.envs, seed, options_list, strict=True)
+            zip(self.envs, seed, options_list)
         ):
             self._env_obs[i], env_info = env.reset(
                 seed=single_seed, options=single_options
