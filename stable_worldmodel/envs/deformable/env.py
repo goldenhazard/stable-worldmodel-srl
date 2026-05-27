@@ -161,7 +161,7 @@ class DeformableEnv(gym.Env):
             "state": np.zeros((0,), dtype=np.float32),
         }
         info = self._build_info(pixels)
-        info["state"] = state
+        info["particle_state"] = state  # avoid collision with obs['state']
         # Open-ended pushing — chamfer eval is computed externally by the
         # planner via chamfer_to_goal().
         return observation, 0.0, False, False, info
