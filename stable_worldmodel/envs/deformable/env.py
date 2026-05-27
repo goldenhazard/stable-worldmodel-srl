@@ -125,11 +125,16 @@ class DeformableEnv(gym.Env):
         self._goal_state = goal_state
         self._goal_image = goal_image
 
+        # observation_space declares state as Box(shape=(0,)) because particle
+        # count is sim-dependent. Return an empty placeholder so gym.vector
+        # concat doesn't choke on dimension mismatch. The real state lives in
+        # info["state"] (and self._last_state for direct callers).
         observation = {
             "proprio": np.asarray(obs["proprio"], dtype=np.float32),
-            "state": self._last_state.reshape(-1),
+            "state": np.zeros((0,), dtype=np.float32),
         }
         info = self._build_info(pixels)
+        info["state"] = self._last_state
         return observation, info
 
     def step(self, action):
@@ -149,8 +154,14 @@ class DeformableEnv(gym.Env):
         self._last_state = state
         self._last_eef = infos.get("pos_agent", [None])[0]
 
-        observation = {"proprio": proprio, "state": state}
+        # See reset() — keep state out of the gym observation (vector concat
+        # incompatible with variable-length); expose via info["state"] instead.
+        observation = {
+            "proprio": proprio,
+            "state": np.zeros((0,), dtype=np.float32),
+        }
         info = self._build_info(pixels)
+        info["state"] = state
         # Open-ended pushing — chamfer eval is computed externally by the
         # planner via chamfer_to_goal().
         return observation, 0.0, False, False, info
