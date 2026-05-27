@@ -49,6 +49,13 @@ env = [
     "gymnasium[all]",
     "opencv-python",
     "stable_baselines3",
+    # Deformable env (rope, granular) — PyFlex itself is built externally
+    # via dino_wm/install_pyflex.sh; these are its python-side deps.
+    "pybullet",
+    "pyglet",
+    "beautifulsoup4",
+    "pyyaml",
+    "scipy",
 ]
 
 lerobot = [

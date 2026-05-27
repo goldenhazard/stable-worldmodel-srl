@@ -1,0 +1,22 @@
+# DINO-WM-equivalent training on the granular deformable task. See
+# prejepa_rope.yaml for context — only dataset_name and output_model_name
+# differ.
+
+defaults:
+  - prejepa
+  - _self_
+
+output_model_name: granular_${backbone.type}_p${predictor.size}
+
+dataset_name: deformable_granular_expert_train
+frameskip: 1
+batch_size: 32
+
+wm:
+  history_size: 1
+  num_preds: 1
+  encoding:
+    action: 10
+
+trainer:
+  max_epochs: 100

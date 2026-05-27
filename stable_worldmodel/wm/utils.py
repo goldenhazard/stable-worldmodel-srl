@@ -90,9 +90,74 @@ def load_pretrained(name: str, cache_dir: str = None, extra_args=None):
                 d = d.setdefault(part, {})
             d[parts[-1]] = value
 
-    model = instantiate(config)
+    model = _instantiate_config(config)
     model.load_state_dict(state_dict)
     return model
+
+
+def _instantiate_config(config: dict):
+    """Instantiate a model config.
+
+    Supports the normal Hydra `_target_` format and a legacy/raw LeWM config
+    format that only stores submodule kwargs.
+    """
+    from hydra.utils import instantiate
+
+    if "_target_" in config:
+        return instantiate(config)
+
+    if all(k in config for k in ("encoder", "predictor", "action_encoder")):
+        import stable_pretraining as spt
+        import stable_worldmodel as swm
+        import torch
+        from stable_worldmodel.wm.lewm.lewm import LeWM
+        from stable_worldmodel.wm.lewm.module import Embedder, MLP, Predictor
+
+        encoder_cfg = dict(config["encoder"])
+        predictor_cfg = dict(config["predictor"])
+        action_encoder_cfg = dict(config["action_encoder"])
+        projector_cfg = dict(config.get("projector", {}))
+        pred_proj_cfg = dict(config.get("pred_proj", {}))
+
+        encoder = spt.backbone.utils.vit_hf(
+            encoder_cfg["scale"],
+            patch_size=encoder_cfg["patch_size"],
+            image_size=encoder_cfg["image_size"],
+            pretrained=False,
+            use_mask_token=False,
+        )
+
+        predictor = Predictor(**predictor_cfg)
+        action_encoder = Embedder(**action_encoder_cfg)
+        projector = (
+            MLP(
+                **projector_cfg,
+                norm_fn=torch.nn.BatchNorm1d,
+            )
+            if projector_cfg
+            else None
+        )
+        pred_proj = (
+            MLP(
+                **pred_proj_cfg,
+                norm_fn=torch.nn.BatchNorm1d,
+            )
+            if pred_proj_cfg
+            else None
+        )
+
+        return LeWM(
+            encoder=encoder,
+            predictor=predictor,
+            action_encoder=action_encoder,
+            projector=projector,
+            pred_proj=pred_proj,
+        )
+
+    raise ValueError(
+        "Unsupported checkpoint config format: expected Hydra `_target_` config "
+        "or a raw LeWM config."
+    )
 
 
 def _resolve(name: str, cache_dir: Path) -> tuple[Path, dict]:

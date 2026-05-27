@@ -137,7 +137,9 @@ celerybeat.pid
 # Environments
 .env
 .venv
-env/
+# Anchored to repo root so it does not match nested directories like
+# stable_worldmodel/envs/deformable/conf/env/ (hydra scene configs).
+/env/
 venv/
 ENV/
 env.bak/

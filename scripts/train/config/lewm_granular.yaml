@@ -1,0 +1,29 @@
+# LE-WM (JEPA + SIGReg) training on the granular deformable task.
+# Mirrors lewm_rope.yaml — see that file for the why behind each setting.
+
+defaults:
+  - lewm
+  - override /data: granular
+  - _self_
+
+output_model_name: lewm_granular_hist1
+
+wm:
+  history_size: 1
+  num_preds: 1
+  embed_dim: 192
+
+loader:
+  batch_size: 32
+
+trainer:
+  max_epochs: 100
+
+wandb:
+  enabled: True
+  config:
+    entity: null
+    project: dino_wm
+    name: ${output_model_name}
+    resume: allow
+    log_model: False

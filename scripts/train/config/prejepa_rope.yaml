@@ -1,0 +1,28 @@
+# DINO-WM-equivalent training on the rope deformable task.
+# Mirrors prejepa.yaml but with dataset + history settings from the
+# validated dino_wm deformable recipe (num_hist=1, num_pred=1, frameskip=1,
+# epochs=100). Proprio is omitted from encoding because the dataset's
+# proprio column is a dummy (1,) zero vector.
+
+defaults:
+  - prejepa
+  - _self_
+
+# --- Run ---
+output_model_name: rope_${backbone.type}_p${predictor.size}
+
+# --- Data ---
+dataset_name: deformable_rope_expert_train
+frameskip: 1
+batch_size: 32
+
+# --- World model (matches dino_wm deformable recipe) ---
+wm:
+  history_size: 1
+  num_preds: 1
+  encoding:
+    action: 10
+
+# --- Trainer (100 epochs per Kathy's email) ---
+trainer:
+  max_epochs: 100

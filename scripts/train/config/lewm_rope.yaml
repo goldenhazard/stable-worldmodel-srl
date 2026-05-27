@@ -1,0 +1,40 @@
+# LE-WM (JEPA + SIGReg) training on the rope deformable task.
+#
+# Hyperparameters follow dino_wm's validated deformable recipe so that
+# the run can be directly compared against the published DINO-WM
+# numbers on rope:
+#   num_hist=1, num_pred=1, frameskip=1, batch_size=32, 100 epochs.
+#
+# LE-WM architectural defaults (encoder=tiny ViT, embed_dim=192, lr=5e-5,
+# sigreg weight=0.09) come from lewm.yaml and are not overridden.
+#
+# Wandb logs to the same project/account as dino-wm so both backbones
+# appear side-by-side. entity=null lets wandb fall back to the default
+# entity from ~/.netrc (the account dino-wm trained under).
+
+defaults:
+  - lewm
+  - override /data: rope
+  - _self_
+
+output_model_name: lewm_rope_hist1
+
+wm:
+  history_size: 1
+  num_preds: 1
+  embed_dim: 192
+
+loader:
+  batch_size: 32
+
+trainer:
+  max_epochs: 100
+
+wandb:
+  enabled: True
+  config:
+    entity: null
+    project: dino_wm
+    name: ${output_model_name}
+    resume: allow
+    log_model: False

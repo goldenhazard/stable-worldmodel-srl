@@ -520,7 +520,19 @@ def _load_model_with_attribute(run_name, attribute_name, cache_dir=None):
             f'Checkpoint path does not exist: {path}. Launch pretraining first.'
         )
 
-    spt_module = torch.load(path, weights_only=False, map_location='cpu')
+    try:
+        spt_module = torch.load(path, weights_only=False, map_location='cpu')
+    except Exception:
+        fallback_dir = path.parent
+        if (
+            (fallback_dir / 'weights.pt').exists()
+            and (fallback_dir / 'config.json').exists()
+        ):
+            from stable_worldmodel.wm.utils import load_pretrained
+
+            spt_module = load_pretrained(str(fallback_dir))
+        else:
+            raise
 
     def scan_module(module):
         if hasattr(module, attribute_name):

@@ -4,8 +4,8 @@ from gymnasium.envs import registration
 WORLDS = set()
 
 
-def register(id, entry_point):
-    registration.register(id=id, entry_point=entry_point)
+def register(id, entry_point, **kwargs):
+    registration.register(id=id, entry_point=entry_point, **kwargs)
     WORLDS.add(id)
 
 
@@ -126,4 +126,25 @@ register(
 register(
     id='swm/PushT-Discrete-v1',
     entry_point='stable_worldmodel.envs.pusht:PushTDiscrete',
+)
+
+
+##############
+# DEFORMABLE #
+##############
+
+# PyFlex-backed rope and granular pushing tasks vendored from dino_wm. The
+# env class lazily imports pyflex on construction; train-time use against
+# the pre-recorded HDF5 datasets does not need pyflex installed.
+
+register(
+    id='swm/Rope-v0',
+    entry_point='stable_worldmodel.envs.deformable.env:DeformableEnv',
+    kwargs={'object_name': 'rope'},
+)
+
+register(
+    id='swm/Granular-v0',
+    entry_point='stable_worldmodel.envs.deformable.env:DeformableEnv',
+    kwargs={'object_name': 'granular'},
 )
